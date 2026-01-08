@@ -37,6 +37,11 @@ jobs:
           zip -r ../function.zip . > /dev/null
           cd ..
           echo "Package size: $(du -h function.zip | cut -f1)"
+          
+          if [ ! -f function.zip ]; then
+            echo "Error: function.zip was not created"
+            exit 1
+          fi
       
       - name: Get IAM token and deploy function
         env:
@@ -50,82 +55,129 @@ jobs:
           import jwt
           from datetime import datetime, timedelta
           import os
+          import sys
           
           # Get service account key from environment
-          sa_key_json = os.environ.get('SA_KEY_JSON', '').strip()
+          # Try both SA_KEY_JSON and YC_SERVICE_ACCOUNT_KEY
+          sa_key_json = os.environ.get('SA_KEY_JSON', '').strip() or os.environ.get('YC_SERVICE_ACCOUNT_KEY', '').strip()
+          
           if not sa_key_json:
-              print("Error: SA_KEY_JSON is empty")
-              print(f"Env vars available: {[k for k in os.environ.keys() if 'KEY' in k or 'FUNCTION' in k]}")
-              exit(1)
+              print("Error: Service account key is empty")
+              print(f"Available env vars: {[k for k in os.environ.keys() if 'KEY' in k or 'FUNCTION' in k or 'YC' in k]}")
+              sys.exit(1)
           
           try:
               sa_key = json.loads(sa_key_json)
           except json.JSONDecodeError as e:
               print(f"Error parsing JSON: {e}")
-              print(f"First 100 chars: {sa_key_json[:100]}")
-              exit(1)
+              print(f"First 200 chars: {sa_key_json[:200]}")
+              sys.exit(1)
           
-          function_id = os.environ.get('FUNCTION_ID', '').strip()
+          # Validate required keys
+          required_keys = ['service_account_id', 'private_key', 'id']
+          missing_keys = [k for k in required_keys if k not in sa_key]
+          if missing_keys:
+              print(f"Error: Missing required keys in service account: {missing_keys}")
+              sys.exit(1)
+          
+          function_id = os.environ.get('FUNCTION_ID', '').strip() or os.environ.get('YC_FUNCTION_ID', '').strip()
           if not function_id:
               print("Error: FUNCTION_ID is empty")
-              exit(1)
+              sys.exit(1)
           
           print("✓ Service account key loaded")
           print(f"✓ Function ID: {function_id}")
           
-          # Create JWT for IAM token request
-          now = datetime.utcnow()
-          payload = {
-              'aud': 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-              'iss': sa_key['service_account_id'],
-              'iat': int(time.mktime(now.timetuple())),
-              'exp': int(time.mktime((now + timedelta(hours=1)).timetuple()))
-          }
+          # Check if function.zip exists
+          if not os.path.exists('function.zip'):
+              print("Error: function.zip not found")
+              sys.exit(1)
           
-          # Sign JWT
-          encoded_token = jwt.encode(
-              payload,
-              sa_key['private_key'],
-              algorithm='PS256',
-              headers={'kid': sa_key['id']}
-          )
+          zip_size = os.path.getsize('function.zip')
+          print(f"✓ Package size: {zip_size / 1024 / 1024:.2f} MB")
+          
+          # Create JWT for IAM token request
+          try:
+              now = datetime.utcnow()
+              payload = {
+                  'aud': 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
+                  'iss': sa_key['service_account_id'],
+                  'iat': int(time.mktime(now.timetuple())),
+                  'exp': int(time.mktime((now + timedelta(hours=1)).timetuple()))
+              }
+              
+              # Sign JWT
+              encoded_token = jwt.encode(
+                  payload,
+                  sa_key['private_key'],
+                  algorithm='PS256',
+                  headers={'kid': sa_key['id']}
+              )
+          except Exception as e:
+              print(f"Error creating JWT: {e}")
+              sys.exit(1)
           
           # Get IAM token
-          iam_response = requests.post(
-              'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-              json={'jwt': encoded_token}
-          )
-          iam_response.raise_for_status()
-          iam_token = iam_response.json()['iamToken']
+          try:
+              iam_response = requests.post(
+                  'https://iam.api.cloud.yandex.net/iam/v1/tokens',
+                  json={'jwt': encoded_token},
+                  timeout=30
+              )
+              iam_response.raise_for_status()
+              iam_data = iam_response.json()
+              
+              if 'iamToken' not in iam_data:
+                  print(f"Error: No iamToken in response: {iam_data}")
+                  sys.exit(1)
+              
+              iam_token = iam_data['iamToken']
+          except requests.exceptions.RequestException as e:
+              print(f"Error getting IAM token: {e}")
+              if hasattr(e, 'response') and e.response is not None:
+                  print(f"Response: {e.response.text}")
+              sys.exit(1)
           
           print("✓ IAM token obtained")
           
           # Read function.zip
-          with open('function.zip', 'rb') as f:
-              zip_content = f.read()
+          try:
+              with open('function.zip', 'rb') as f:
+                  zip_content = f.read()
+          except Exception as e:
+              print(f"Error reading function.zip: {e}")
+              sys.exit(1)
           
           # Create function version
-          create_response = requests.post(
-              f'https://serverless-functions.api.cloud.yandex.net/functions/v1/functions/{function_id}/versions',
-              headers={
-                  'Authorization': f'Bearer {iam_token}',
-                  'Content-Type': 'application/zip'
-              },
-              data=zip_content,
-              params={
-                  'runtime': 'python311',
-                  'entrypoint': 'index.handler',
-                  'resources.memory': '134217728',
-                  'executionTimeout': '3s',
-                  'environment': 'PYTHONUNBUFFERED=1'
-              }
-          )
-          
-          if create_response.status_code == 200:
-              version = create_response.json()
-              print(f"✓ Function version created: {version.get('id', 'unknown')}")
-          else:
-              print(f"✗ Error: {create_response.status_code}")
-              print(create_response.text)
-              exit(1)
+          try:
+              create_response = requests.post(
+                  f'https://serverless-functions.api.cloud.yandex.net/functions/v1/functions/{function_id}/versions',
+                  headers={
+                      'Authorization': f'Bearer {iam_token}',
+                      'Content-Type': 'application/zip'
+                  },
+                  data=zip_content,
+                  params={
+                      'runtime': 'python311',
+                      'entrypoint': 'index.handler',
+                      'resources.memory': '134217728',
+                      'executionTimeout': '3s',
+                      'environment': 'PYTHONUNBUFFERED=1'
+                  },
+                  timeout=300
+              )
+              
+              if create_response.status_code in [200, 201]:
+                  version = create_response.json()
+                  version_id = version.get('id', 'unknown')
+                  print(f"✓ Function version created: {version_id}")
+              else:
+                  print(f"✗ Error: HTTP {create_response.status_code}")
+                  print(f"Response: {create_response.text}")
+                  sys.exit(1)
+          except requests.exceptions.RequestException as e:
+              print(f"Error creating function version: {e}")
+              if hasattr(e, 'response') and e.response is not None:
+                  print(f"Response: {e.response.text}")
+              sys.exit(1)
           PYTHON_SCRIPT
