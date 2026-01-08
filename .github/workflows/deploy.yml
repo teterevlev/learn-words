@@ -59,11 +59,18 @@ jobs:
           
           # Get service account key from environment
           # Try both SA_KEY_JSON and YC_SERVICE_ACCOUNT_KEY
-          sa_key_json = os.environ.get('SA_KEY_JSON', '').strip() or os.environ.get('YC_SERVICE_ACCOUNT_KEY', '').strip()
+          sa_key_json_raw = os.environ.get('SA_KEY_JSON', '') or os.environ.get('YC_SERVICE_ACCOUNT_KEY', '')
+          sa_key_json = sa_key_json_raw.strip() if sa_key_json_raw else ''
           
           if not sa_key_json:
               print("Error: Service account key is empty")
               print(f"Available env vars: {[k for k in os.environ.keys() if 'KEY' in k or 'FUNCTION' in k or 'YC' in k]}")
+              print(f"SA_KEY_JSON length: {len(os.environ.get('SA_KEY_JSON', ''))}")
+              print(f"YC_SERVICE_ACCOUNT_KEY length: {len(os.environ.get('YC_SERVICE_ACCOUNT_KEY', ''))}")
+              print("\nPlease check GitHub Secrets:")
+              print("1. Go to Settings → Secrets and variables → Actions")
+              print("2. Verify YC_SERVICE_ACCOUNT_KEY exists and contains full JSON key")
+              print("3. The JSON should start with '{' and end with '}'")
               sys.exit(1)
           
           try:
