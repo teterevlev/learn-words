@@ -121,11 +121,14 @@ jobs:
       
       - name: Verify IAM token
         run: |
-          if [ -z "${{ env.IAM_TOKEN }}" ]; then
+          if [ -z "$IAM_TOKEN" ]; then
             echo "Error: IAM_TOKEN is empty after generation"
+            echo "Checking env vars..."
+            env | grep -i token || echo "No token env vars found"
             exit 1
           fi
           echo "✓ IAM token is set (length: ${#IAM_TOKEN})"
+          echo "Token preview: ${IAM_TOKEN:0:20}..."
       
       - name: Prepare deployment directory
         run: |
