@@ -165,8 +165,23 @@ jobs:
           echo "Files in package:"
           find package -type f
       
+      - name: Debug IAM token before deploy
+        run: |
+          echo "Checking IAM_TOKEN..."
+          if [ -n "$IAM_TOKEN" ]; then
+            echo "IAM_TOKEN is set (length: ${#IAM_TOKEN})"
+            echo "First 20 chars: ${IAM_TOKEN:0:20}..."
+          else
+            echo "ERROR: IAM_TOKEN is NOT set!"
+            echo "Available env vars with TOKEN:"
+            env | grep -i token || echo "No TOKEN vars found"
+            exit 1
+          fi
+      
       - name: Deploy to Yandex Cloud Functions
         id: deploy
+        env:
+          IAM_TOKEN: ${{ env.IAM_TOKEN }}
         uses: goodsmileduck/yandex-serverless-action@v2
         with:
           token: ${{ env.IAM_TOKEN }}
