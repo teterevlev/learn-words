@@ -39,7 +39,7 @@ if [ -z "$1" ]; then
     echo "   ./scripts/test-deploy.sh <FUNCTION_ID>"
     echo ""
     echo "💡 Или создайте функцию:"
-    echo "   yc serverless function create --name learn-words"
+    echo "   yc serverless function create --name my-function"
     exit 0
 fi
 

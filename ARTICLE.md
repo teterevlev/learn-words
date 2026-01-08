@@ -181,7 +181,7 @@ yc init
 ### 4.3. Создание функции
 
 ```bash
-yc serverless function create --name learn-words
+yc serverless function create --name my-function
 ```
 
 **Скопируйте выведенный `id`** — это `YC_FUNCTION_ID`.
@@ -295,7 +295,7 @@ git init
 git add .
 git commit -m "Initial commit: setup YC function project"
 git branch -M main
-git remote add origin https://github.com/username/learn-words.git
+git remote add origin https://github.com/username/yc-lambda-template.git
 git push -u origin main
 ```
 
