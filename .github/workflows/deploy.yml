@@ -31,160 +31,39 @@ jobs:
           fi
           echo "✓ Secrets validated"
       
-      - name: Install dependencies and get IAM token
-        env:
-          YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
-        run: |
-          pip install --quiet pyjwt cryptography requests
-          python3 << 'EOF'
-          import json
-          import os
-          import requests
-          import jwt
-          import time
-          import sys
-          from datetime import datetime, timedelta
-          
-          try:
-              sa_key_json = os.environ.get('YC_SERVICE_ACCOUNT_KEY', '').strip()
-              if not sa_key_json:
-                  print("Error: YC_SERVICE_ACCOUNT_KEY is empty", file=sys.stderr)
-                  sys.exit(1)
-              
-              sa_key = json.loads(sa_key_json)
-              
-              required_fields = ['service_account_id', 'private_key', 'id']
-              missing = [f for f in required_fields if f not in sa_key]
-              if missing:
-                  print(f"Error: Missing required fields in service account key: {missing}", file=sys.stderr)
-                  sys.exit(1)
-              
-              now = datetime.utcnow()
-              payload = {
-                  'aud': 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-                  'iss': sa_key['service_account_id'],
-                  'iat': int(time.mktime(now.timetuple())),
-                  'exp': int(time.mktime((now + timedelta(hours=1)).timetuple()))
-              }
-              
-              encoded_token = jwt.encode(
-                  payload, 
-                  sa_key['private_key'], 
-                  algorithm='PS256', 
-                  headers={'kid': sa_key['id']}
-              )
-              
-              response = requests.post(
-                  'https://iam.api.cloud.yandex.net/iam/v1/tokens',
-                  json={'jwt': encoded_token},
-                  timeout=30
-              )
-              
-              if response.status_code != 200:
-                  print(f"Error getting IAM token: HTTP {response.status_code}", file=sys.stderr)
-                  print(f"Response: {response.text}", file=sys.stderr)
-                  sys.exit(1)
-              
-              iam_data = response.json()
-              if 'iamToken' not in iam_data:
-                  print(f"Error: No iamToken in response: {iam_data}", file=sys.stderr)
-                  sys.exit(1)
-              
-              iam_token = iam_data['iamToken']
-              
-              github_env = os.environ.get('GITHUB_ENV')
-              if github_env:
-                  with open(github_env, 'a') as f:
-                      f.write(f"IAM_TOKEN={iam_token}\n")
-                  print("✓ IAM token obtained and saved to GITHUB_ENV")
-              else:
-                  print("Warning: GITHUB_ENV not found, trying output")
-                  print(f"::add-mask::{iam_token[:10]}...")
-                  
-              # Also save to output for debugging
-              print(f"Token length: {len(iam_token)}")
-              print("✓ IAM token obtained successfully")
-              
-          except json.JSONDecodeError as e:
-              print(f"Error parsing service account key JSON: {e}", file=sys.stderr)
-              sys.exit(1)
-          except jwt.PyJWTError as e:
-              print(f"Error creating JWT: {e}", file=sys.stderr)
-              sys.exit(1)
-          except requests.exceptions.RequestException as e:
-              print(f"Error connecting to IAM API: {e}", file=sys.stderr)
-              sys.exit(1)
-          except Exception as e:
-              print(f"Unexpected error: {e}", file=sys.stderr)
-              sys.exit(1)
-          EOF
-      
-      - name: Verify IAM token
-        run: |
-          if [ -z "$IAM_TOKEN" ]; then
-            echo "Error: IAM_TOKEN is empty after generation"
-            echo "Checking env vars..."
-            env | grep -i token || echo "No token env vars found"
-            exit 1
-          fi
-          echo "✓ IAM token is set (length: ${#IAM_TOKEN})"
-          echo "Token preview: ${IAM_TOKEN:0:20}..."
-      
       - name: Prepare deployment directory
         run: |
           mkdir -p package
           
-          # Copy Python files
           if ! cp *.py package/ 2>/dev/null; then
             echo "Warning: No Python files found in root"
           fi
           
-          # Copy lib directory if exists
           if [ -d "lib" ]; then
             cp -r lib package/ 2>/dev/null || true
           fi
           
-          # Copy requirements.txt if exists
           if [ -f "requirements.txt" ]; then
             cp requirements.txt package/
           fi
           
-          # Validate package is not empty
           if [ ! "$(ls -A package)" ]; then
             echo "Error: Package directory is empty"
             exit 1
           fi
           
-          # Check that index.py exists
           if [ ! -f "package/index.py" ]; then
             echo "Error: index.py not found in package"
             exit 1
           fi
           
           echo "✓ Package prepared"
-          echo "Files in package:"
           find package -type f
       
-      - name: Debug IAM token before deploy
-        run: |
-          echo "Checking IAM_TOKEN..."
-          if [ -n "$IAM_TOKEN" ]; then
-            echo "IAM_TOKEN is set (length: ${#IAM_TOKEN})"
-            echo "First 20 chars: ${IAM_TOKEN:0:20}..."
-          else
-            echo "ERROR: IAM_TOKEN is NOT set!"
-            echo "Available env vars with TOKEN:"
-            env | grep -i token || echo "No TOKEN vars found"
-            exit 1
-          fi
-      
       - name: Deploy to Yandex Cloud Functions
-        id: deploy
-        env:
-          IAM_TOKEN: ${{ env.IAM_TOKEN }}
         uses: goodsmileduck/yandex-serverless-action@v2
         with:
-          token: ${{ env.IAM_TOKEN }}
+          token: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
           function_id: ${{ secrets.YC_FUNCTION_ID }}
           runtime: 'python311'
           memory: '128'
