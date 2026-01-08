@@ -19,16 +19,139 @@ jobs:
         with:
           python-version: '3.11'
       
+      - name: Validate secrets
+        run: |
+          if [ -z "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}" ]; then
+            echo "Error: YC_SERVICE_ACCOUNT_KEY secret is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.YC_FUNCTION_ID }}" ]; then
+            echo "Error: YC_FUNCTION_ID secret is not set"
+            exit 1
+          fi
+          echo "✓ Secrets validated"
+      
+      - name: Install dependencies and get IAM token
+        env:
+          YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
+        run: |
+          pip install --quiet pyjwt cryptography requests
+          python3 << 'EOF'
+          import json
+          import os
+          import requests
+          import jwt
+          import time
+          import sys
+          from datetime import datetime, timedelta
+          
+          try:
+              sa_key_json = os.environ.get('YC_SERVICE_ACCOUNT_KEY', '').strip()
+              if not sa_key_json:
+                  print("Error: YC_SERVICE_ACCOUNT_KEY is empty", file=sys.stderr)
+                  sys.exit(1)
+              
+              sa_key = json.loads(sa_key_json)
+              
+              required_fields = ['service_account_id', 'private_key', 'id']
+              missing = [f for f in required_fields if f not in sa_key]
+              if missing:
+                  print(f"Error: Missing required fields in service account key: {missing}", file=sys.stderr)
+                  sys.exit(1)
+              
+              now = datetime.utcnow()
+              payload = {
+                  'aud': 'https://iam.api.cloud.yandex.net/iam/v1/tokens',
+                  'iss': sa_key['service_account_id'],
+                  'iat': int(time.mktime(now.timetuple())),
+                  'exp': int(time.mktime((now + timedelta(hours=1)).timetuple()))
+              }
+              
+              encoded_token = jwt.encode(
+                  payload, 
+                  sa_key['private_key'], 
+                  algorithm='PS256', 
+                  headers={'kid': sa_key['id']}
+              )
+              
+              response = requests.post(
+                  'https://iam.api.cloud.yandex.net/iam/v1/tokens',
+                  json={'jwt': encoded_token},
+                  timeout=30
+              )
+              
+              if response.status_code != 200:
+                  print(f"Error getting IAM token: HTTP {response.status_code}", file=sys.stderr)
+                  print(f"Response: {response.text}", file=sys.stderr)
+                  sys.exit(1)
+              
+              iam_data = response.json()
+              if 'iamToken' not in iam_data:
+                  print(f"Error: No iamToken in response: {iam_data}", file=sys.stderr)
+                  sys.exit(1)
+              
+              iam_token = iam_data['iamToken']
+              
+              with open(os.environ.get('GITHUB_ENV', '/dev/stdout'), 'a') as f:
+                  f.write(f"IAM_TOKEN={iam_token}\n")
+              
+              print("✓ IAM token obtained")
+              
+          except json.JSONDecodeError as e:
+              print(f"Error parsing service account key JSON: {e}", file=sys.stderr)
+              sys.exit(1)
+          except jwt.PyJWTError as e:
+              print(f"Error creating JWT: {e}", file=sys.stderr)
+              sys.exit(1)
+          except requests.exceptions.RequestException as e:
+              print(f"Error connecting to IAM API: {e}", file=sys.stderr)
+              sys.exit(1)
+          except Exception as e:
+              print(f"Unexpected error: {e}", file=sys.stderr)
+              sys.exit(1)
+          EOF
+      
       - name: Prepare deployment directory
         run: |
           mkdir -p package
-          cp -r *.py lib/ 2>/dev/null || true
-          cp requirements.txt package/ 2>/dev/null || true
+          
+          # Copy Python files
+          if ! cp *.py package/ 2>/dev/null; then
+            echo "Warning: No Python files found in root"
+          fi
+          
+          # Copy lib directory if exists
+          if [ -d "lib" ]; then
+            cp -r lib package/ 2>/dev/null || true
+          fi
+          
+          # Copy requirements.txt if exists
+          if [ -f "requirements.txt" ]; then
+            cp requirements.txt package/
+          fi
+          
+          # Validate package is not empty
+          if [ ! "$(ls -A package)" ]; then
+            echo "Error: Package directory is empty"
+            exit 1
+          fi
+          
+          # Check that index.py exists
+          if [ ! -f "package/index.py" ]; then
+            echo "Error: index.py not found in package"
+            exit 1
+          fi
+          
+          echo "✓ Package prepared"
+          echo "Files in package:"
+          find package -type f
       
       - name: Deploy to Yandex Cloud Functions
+        env:
+          IAM_TOKEN: ${{ env.IAM_TOKEN }}
         uses: goodsmileduck/yandex-serverless-action@v2
         with:
-          token: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
+          token: ${{ env.IAM_TOKEN }}
           function_id: ${{ secrets.YC_FUNCTION_ID }}
           runtime: 'python311'
           memory: '128'
