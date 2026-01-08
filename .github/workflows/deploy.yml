@@ -14,38 +14,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Validate secrets
-        run: |
-          if [ -z "${{ secrets.YC_SERVICE_ACCOUNT_KEY }}" ]; then
-            echo "Error: YC_SERVICE_ACCOUNT_KEY secret is not set"
-            exit 1
-          fi
-          if [ -z "${{ secrets.YC_FUNCTION_ID }}" ]; then
-            echo "Error: YC_FUNCTION_ID secret is not set"
-            exit 1
-          fi
-          echo "✓ Secrets validated"
-      
       - name: Prepare deployment directory
         run: |
           mkdir -p package
-          
-          if ! cp *.py package/ 2>/dev/null; then
-            echo "Warning: No Python files found in root"
-          fi
-          
-          if [ -d "lib" ]; then
-            cp -r lib package/ 2>/dev/null || true
-          fi
-          
-          if [ -f "requirements.txt" ]; then
-            cp requirements.txt package/
-          fi
+          cp *.py package/ 2>/dev/null || true
+          [ -d "lib" ] && cp -r lib package/ || true
+          [ -f "requirements.txt" ] && cp requirements.txt package/ || true
           
           if [ ! "$(ls -A package)" ]; then
             echo "Error: Package directory is empty"
@@ -53,21 +27,24 @@ jobs:
           fi
           
           if [ ! -f "package/index.py" ]; then
-            echo "Error: index.py not found in package"
+            echo "Error: index.py not found"
             exit 1
           fi
           
           echo "✓ Package prepared"
-          find package -type f
       
       - name: Deploy to Yandex Cloud Functions
-        uses: goodsmileduck/yandex-serverless-action@v2
+        uses: yc-actions/yc-sls-function@v4
         with:
-          token: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
-          function_id: ${{ secrets.YC_FUNCTION_ID }}
+          yc-sa-json-credentials: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
+          folder-id: ${{ secrets.YC_FOLDER_ID }}
+          function-name: learn-words
+          function-id: ${{ secrets.YC_FUNCTION_ID }}
           runtime: 'python311'
-          memory: '128'
+          memory: '256Mb'
           entrypoint: 'index.handler'
-          execution_timeout: '3s'
-          source: 'package'
-          environment: 'PYTHONUNBUFFERED=1'
+          execution-timeout: '3s'
+          environment: |
+            PYTHONUNBUFFERED=1
+          include: |
+            package/**/*
