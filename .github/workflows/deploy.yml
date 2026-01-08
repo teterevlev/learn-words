@@ -6,11 +6,6 @@ on:
       - main
   workflow_dispatch:
 
-env:
-  YC_FUNCTION_ID: ${{ secrets.YC_FUNCTION_ID }}
-  YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
-  YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -45,8 +40,8 @@ jobs:
       
       - name: Get IAM token and deploy function
         env:
-          SA_KEY_JSON: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
-          FUNCTION_ID: ${{ secrets.YC_FUNCTION_ID }}
+          YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
+          YC_FUNCTION_ID: ${{ secrets.YC_FUNCTION_ID }}
         run: |
           python3 << 'PYTHON_SCRIPT'
           import json
@@ -57,39 +52,30 @@ jobs:
           import os
           import sys
           
-          # Get service account key from environment
-          # Try both SA_KEY_JSON and YC_SERVICE_ACCOUNT_KEY
-          sa_key_json_raw = os.environ.get('SA_KEY_JSON', '') or os.environ.get('YC_SERVICE_ACCOUNT_KEY', '')
-          sa_key_json = sa_key_json_raw.strip() if sa_key_json_raw else ''
+          # Get service account key from environment (как в рабочем примере)
+          sa_key_json = os.getenv('YC_SERVICE_ACCOUNT_KEY', '').strip()
           
           if not sa_key_json:
-              print("Error: Service account key is empty")
-              print(f"Available env vars: {[k for k in os.environ.keys() if 'KEY' in k or 'FUNCTION' in k or 'YC' in k]}")
-              print(f"SA_KEY_JSON length: {len(os.environ.get('SA_KEY_JSON', ''))}")
-              print(f"YC_SERVICE_ACCOUNT_KEY length: {len(os.environ.get('YC_SERVICE_ACCOUNT_KEY', ''))}")
-              print("\nPlease check GitHub Secrets:")
-              print("1. Go to Settings → Secrets and variables → Actions")
-              print("2. Verify YC_SERVICE_ACCOUNT_KEY exists and contains full JSON key")
-              print("3. The JSON should start with '{' and end with '}'")
+              print("Error: YC_SERVICE_ACCOUNT_KEY is empty", file=sys.stderr)
+              print("Please check GitHub Secrets: Settings → Secrets and variables → Actions", file=sys.stderr)
               sys.exit(1)
           
           try:
               sa_key = json.loads(sa_key_json)
           except json.JSONDecodeError as e:
-              print(f"Error parsing JSON: {e}")
-              print(f"First 200 chars: {sa_key_json[:200]}")
+              print(f"Error parsing JSON: {e}", file=sys.stderr)
               sys.exit(1)
           
           # Validate required keys
           required_keys = ['service_account_id', 'private_key', 'id']
           missing_keys = [k for k in required_keys if k not in sa_key]
           if missing_keys:
-              print(f"Error: Missing required keys in service account: {missing_keys}")
+              print(f"Error: Missing required keys in service account: {missing_keys}", file=sys.stderr)
               sys.exit(1)
           
-          function_id = os.environ.get('FUNCTION_ID', '').strip() or os.environ.get('YC_FUNCTION_ID', '').strip()
+          function_id = os.getenv('YC_FUNCTION_ID', '').strip()
           if not function_id:
-              print("Error: FUNCTION_ID is empty")
+              print("Error: YC_FUNCTION_ID is empty", file=sys.stderr)
               sys.exit(1)
           
           print("✓ Service account key loaded")
@@ -97,7 +83,7 @@ jobs:
           
           # Check if function.zip exists
           if not os.path.exists('function.zip'):
-              print("Error: function.zip not found")
+              print("Error: function.zip not found", file=sys.stderr)
               sys.exit(1)
           
           zip_size = os.path.getsize('function.zip')
@@ -121,7 +107,7 @@ jobs:
                   headers={'kid': sa_key['id']}
               )
           except Exception as e:
-              print(f"Error creating JWT: {e}")
+              print(f"Error creating JWT: {e}", file=sys.stderr)
               sys.exit(1)
           
           # Get IAM token
@@ -135,14 +121,14 @@ jobs:
               iam_data = iam_response.json()
               
               if 'iamToken' not in iam_data:
-                  print(f"Error: No iamToken in response: {iam_data}")
+                  print(f"Error: No iamToken in response: {iam_data}", file=sys.stderr)
                   sys.exit(1)
               
               iam_token = iam_data['iamToken']
           except requests.exceptions.RequestException as e:
-              print(f"Error getting IAM token: {e}")
+              print(f"Error getting IAM token: {e}", file=sys.stderr)
               if hasattr(e, 'response') and e.response is not None:
-                  print(f"Response: {e.response.text}")
+                  print(f"Response: {e.response.text}", file=sys.stderr)
               sys.exit(1)
           
           print("✓ IAM token obtained")
@@ -152,7 +138,7 @@ jobs:
               with open('function.zip', 'rb') as f:
                   zip_content = f.read()
           except Exception as e:
-              print(f"Error reading function.zip: {e}")
+              print(f"Error reading function.zip: {e}", file=sys.stderr)
               sys.exit(1)
           
           # Create function version
@@ -179,12 +165,12 @@ jobs:
                   version_id = version.get('id', 'unknown')
                   print(f"✓ Function version created: {version_id}")
               else:
-                  print(f"✗ Error: HTTP {create_response.status_code}")
-                  print(f"Response: {create_response.text}")
+                  print(f"✗ Error: HTTP {create_response.status_code}", file=sys.stderr)
+                  print(f"Response: {create_response.text}", file=sys.stderr)
                   sys.exit(1)
           except requests.exceptions.RequestException as e:
-              print(f"Error creating function version: {e}")
+              print(f"Error creating function version: {e}", file=sys.stderr)
               if hasattr(e, 'response') and e.response is not None:
-                  print(f"Response: {e.response.text}")
+                  print(f"Response: {e.response.text}", file=sys.stderr)
               sys.exit(1)
           PYTHON_SCRIPT
