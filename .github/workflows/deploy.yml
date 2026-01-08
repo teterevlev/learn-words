@@ -1,0 +1,61 @@
+name: Deploy to Yandex Cloud
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  YC_FUNCTION_ID: ${{ secrets.YC_FUNCTION_ID }}
+  YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+  YC_SERVICE_ACCOUNT_KEY: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install YC CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
+          echo "$HOME/.yandex-cloud/bin" >> $GITHUB_PATH
+      
+      - name: Configure YC CLI
+        run: |
+          mkdir -p ~/.config/yandex-cloud
+          echo "$YC_SERVICE_ACCOUNT_KEY" > ~/.config/yandex-cloud/key.json
+          yc config set service-account-key ~/.config/yandex-cloud/key.json
+      
+      - name: Create deployment package
+        run: |
+          mkdir -p package
+          cp -r *.py lib/ 2>/dev/null || true
+          cp requirements.txt package/
+          cd package
+          zip -r ../function.zip .
+          cd ..
+      
+      - name: Upload to Object Storage (optional)
+        run: |
+          if [ -n "${{ secrets.YC_BUCKET_NAME }}" ]; then
+            yc storage cp function.zip s3://${{ secrets.YC_BUCKET_NAME }}/function.zip
+          fi
+      
+      - name: Update function
+        run: |
+          yc serverless function version create \
+            --function-id $YC_FUNCTION_ID \
+            --runtime python311 \
+            --entrypoint index.handler \
+            --memory 128m \
+            --execution-timeout 3s \
+            --source-path function.zip \
+            --environment PYTHONUNBUFFERED=1
