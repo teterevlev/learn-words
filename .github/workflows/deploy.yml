@@ -43,7 +43,7 @@ jobs:
           SA_KEY_JSON: ${{ secrets.YC_SERVICE_ACCOUNT_KEY }}
           FUNCTION_ID: ${{ secrets.YC_FUNCTION_ID }}
         run: |
-          python3 << 'EOF'
+          python3 << 'PYTHON_SCRIPT'
           import json
           import requests
           import time
@@ -55,6 +55,7 @@ jobs:
           sa_key_json = os.environ.get('SA_KEY_JSON', '').strip()
           if not sa_key_json:
               print("Error: SA_KEY_JSON is empty")
+              print(f"Env vars available: {[k for k in os.environ.keys() if 'KEY' in k or 'FUNCTION' in k]}")
               exit(1)
           
           try:
@@ -127,4 +128,4 @@ jobs:
               print(f"✗ Error: {create_response.status_code}")
               print(create_response.text)
               exit(1)
-          EOF
+          PYTHON_SCRIPT
